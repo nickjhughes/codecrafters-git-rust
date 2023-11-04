@@ -1,23 +1,63 @@
 use anyhow::Result;
-use std::{env, fs, path::PathBuf};
+use clap::{Parser, Subcommand};
+use std::{fs, path::PathBuf};
 
 use object::Object;
 
 mod object;
 
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    Init,
+    CatFile {
+        #[arg(short)]
+        pretty_print: bool,
+        object_name: String,
+    },
+    HashObject {
+        #[arg(short)]
+        write: bool,
+        path: PathBuf,
+    },
+    LsTree {
+        #[arg(long)]
+        name_only: bool,
+        tree_hash: String,
+    },
+    WriteTree,
+    CommitTree {
+        tree_hash: String,
+        #[arg(short)]
+        parents: Vec<String>,
+        #[arg(short)]
+        message: String,
+    },
+}
+
 fn main() -> Result<()> {
-    let args: Vec<String> = env::args().collect();
-    match args[1].as_str() {
-        "init" => {
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Init => {
             fs::create_dir(".git")?;
             fs::create_dir(".git/objects")?;
             fs::create_dir(".git/refs")?;
             fs::write(".git/HEAD", "ref: refs/heads/master\n")?;
             println!("Initialized git directory")
         }
-        "cat-file" => {
-            assert_eq!(args[2], "-p");
-            let object_name = &args[3];
+        Commands::CatFile {
+            pretty_print,
+            object_name,
+        } => {
+            assert!(pretty_print);
+
             // Should be a SHA1 hash
             assert_eq!(object_name.len(), 40);
 
@@ -29,51 +69,53 @@ fn main() -> Result<()> {
             assert!(matches!(object, Object::Blob(_)));
             object.print();
         }
-        "hash-object" => {
-            assert_eq!(args[2], "-w");
-            let path = PathBuf::from(&args[3]);
+        Commands::HashObject { write, path } => {
+            assert!(write);
 
             let object = Object::new_from_path(path)?;
             object.add()?;
             println!("{}", object.hash());
         }
-        "ls-tree" => {
-            assert_eq!(args[2], "--name-only");
-            let tree_id = &args[3];
+        Commands::LsTree {
+            name_only,
+            tree_hash,
+        } => {
+            assert!(name_only);
+
             // Should be a SHA1 hash
-            assert_eq!(tree_id.len(), 40);
+            assert_eq!(tree_hash.len(), 40);
 
             let mut path = PathBuf::from(".git/objects");
-            path.push(&tree_id[0..2]);
-            path.push(&tree_id[2..40]);
+            path.push(&tree_hash[0..2]);
+            path.push(&tree_hash[2..40]);
 
             let object = Object::parse(path)?;
             assert!(matches!(object, Object::Tree(_)));
             object.print();
         }
-        "write-tree" => {
+        Commands::WriteTree => {
             let object = Object::new_from_path(PathBuf::from("./"))?;
             object.add()?;
             println!("{}", object.hash());
         }
-        "commit-tree" => {
-            let tree_hash = &args[2];
+        Commands::CommitTree {
+            tree_hash,
+            parents,
+            message,
+        } => {
             // Should be a SHA1 hash
             assert_eq!(tree_hash.len(), 40);
-            assert_eq!(args[3], "-p");
-            let parent_commit_hash = &args[4];
-            // Should be a SHA1 hash
-            assert_eq!(parent_commit_hash.len(), 40);
-            assert_eq!(args[5], "-m");
-            let commit_message = &args[6];
 
-            let object = Object::new_commit(tree_hash, Some(parent_commit_hash), commit_message);
+            assert_eq!(parents.len(), 1);
+            let parent_hash = parents.first().unwrap();
+            // Should be a SHA1 hash
+            assert_eq!(parent_hash.len(), 40);
+
+            let object = Object::new_commit(&tree_hash, Some(parent_hash), &message);
             object.add()?;
             println!("{}", object.hash());
         }
-        cmd => {
-            anyhow::bail!("unknown command: {cmd}")
-        }
     }
+
     Ok(())
 }
