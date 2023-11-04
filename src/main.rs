@@ -26,6 +26,7 @@ fn main() -> Result<()> {
             path.push(&object_name[2..40]);
 
             let object = Object::parse(path)?;
+            assert!(matches!(object, Object::Blob(_)));
             object.print();
         }
         "hash-object" => {
@@ -47,7 +48,13 @@ fn main() -> Result<()> {
             path.push(&tree_id[2..40]);
 
             let object = Object::parse(path)?;
+            assert!(matches!(object, Object::Tree(_)));
             object.print();
+        }
+        "write-tree" => {
+            let object = Object::new(PathBuf::from("./"))?;
+            object.add()?;
+            println!("{}", object.hash());
         }
         cmd => {
             anyhow::bail!("unknown command: {cmd}")
