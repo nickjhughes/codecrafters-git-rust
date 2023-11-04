@@ -28,6 +28,14 @@ fn main() -> Result<()> {
             let object = Object::parse(path)?;
             object.print();
         }
+        "hash-object" => {
+            assert_eq!(args[2], "-w");
+            let path = PathBuf::from(&args[3]);
+
+            let object = Object::new(path)?;
+            object.add()?;
+            println!("{}", object.hash());
+        }
         cmd => {
             anyhow::bail!("unknown command: {cmd}")
         }
