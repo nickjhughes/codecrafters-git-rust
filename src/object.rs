@@ -9,6 +9,35 @@ use std::{
 #[derive(Debug)]
 pub enum Object {
     Blob(Vec<u8>),
+    Tree(Vec<TreeEntry>),
+}
+
+#[derive(Debug)]
+pub struct TreeEntry {
+    name: String,
+}
+
+impl TreeEntry {
+    fn parse(input: &[u8]) -> Result<(&[u8], Self)> {
+        let mut i = 0;
+        while input[i] != b' ' {
+            i += 1;
+        }
+        let _mode = std::str::from_utf8(&input[0..i])?;
+        let input = &input[i + 1..];
+
+        let mut i = 0;
+        while input[i] != 0 {
+            i += 1;
+        }
+        let name = std::str::from_utf8(&input[0..i])?.to_owned();
+        let input = &input[i + 1..];
+
+        let _hash = hex::encode(&input[0..20]);
+        let input = &input[20..];
+
+        Ok((input, TreeEntry { name }))
+    }
 }
 
 impl Object {
@@ -34,8 +63,21 @@ impl Object {
             let object_size = object_header[5..].parse::<usize>()?;
             assert_eq!(object_content.len(), object_size);
             Ok(Object::Blob(object_content.to_vec()))
+        } else if object_header.starts_with("tree") {
+            let object_size = object_header[5..].parse::<usize>()?;
+            assert_eq!(object_content.len(), object_size);
+
+            let mut rest = object_content;
+            let mut entries = Vec::new();
+            while !rest.is_empty() {
+                let (remainder, entry) = TreeEntry::parse(rest)?;
+                rest = remainder;
+                entries.push(entry);
+            }
+
+            Ok(Object::Tree(entries))
         } else {
-            todo!("non-blob object");
+            todo!("non-blob/tree object");
         }
     }
 
@@ -64,6 +106,7 @@ impl Object {
                 encoder.write_all(&[0])?;
                 encoder.write_all(content)?;
             }
+            Object::Tree(_) => todo!(),
         }
 
         Ok(())
@@ -79,6 +122,7 @@ impl Object {
                 hasher.update(content);
                 hex::encode(hasher.finalize())
             }
+            Object::Tree(_) => todo!(),
         }
     }
 
@@ -90,6 +134,7 @@ impl Object {
                 header.push_str("blob ");
                 header.push_str(&content.len().to_string());
             }
+            Object::Tree(_) => todo!(),
         }
         header
     }
@@ -102,6 +147,11 @@ impl Object {
                     "{}",
                     std::str::from_utf8(content).expect("non utf-8 blob contents")
                 );
+            }
+            Object::Tree(entries) => {
+                for entry in entries.iter() {
+                    println!("{}", entry.name);
+                }
             }
         }
     }

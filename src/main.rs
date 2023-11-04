@@ -36,6 +36,19 @@ fn main() -> Result<()> {
             object.add()?;
             println!("{}", object.hash());
         }
+        "ls-tree" => {
+            assert_eq!(args[2], "--name-only");
+            let tree_id = &args[3];
+            // Should be a SHA1 hash
+            assert_eq!(tree_id.len(), 40);
+
+            let mut path = PathBuf::from(".git/objects");
+            path.push(&tree_id[0..2]);
+            path.push(&tree_id[2..40]);
+
+            let object = Object::parse(path)?;
+            object.print();
+        }
         cmd => {
             anyhow::bail!("unknown command: {cmd}")
         }
