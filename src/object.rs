@@ -5,12 +5,14 @@ use std::{
     io::{Read, Write},
     os::unix::prelude::PermissionsExt,
     path::PathBuf,
+    time::SystemTime,
 };
 
 #[derive(Debug)]
 pub enum Object {
     Blob(Vec<u8>),
     Tree(Vec<TreeEntry>),
+    Commit(Commit),
 }
 
 #[derive(Debug)]
@@ -18,6 +20,63 @@ pub struct TreeEntry {
     mode: String,
     name: String,
     hash: String,
+}
+
+#[derive(Debug)]
+pub struct Commit {
+    tree_hash: String,
+    parent_hash: Option<String>,
+    message: String,
+    timestamp: SystemTime,
+}
+
+impl Commit {
+    fn new(tree_hash: &str, parent_hash: Option<&str>, message: &str) -> Self {
+        Commit {
+            tree_hash: tree_hash.to_owned(),
+            parent_hash: parent_hash.map(|s| s.to_owned()),
+            message: message.to_owned(),
+            timestamp: SystemTime::now(),
+        }
+    }
+
+    fn encode(&self) -> Vec<u8> {
+        let mut output = String::new();
+
+        output.push_str("tree ");
+        output.push_str(&self.tree_hash);
+        output.push('\n');
+
+        if let Some(parent_hash) = self.parent_hash.as_ref() {
+            output.push_str("parent ");
+            output.push_str(parent_hash);
+            output.push('\n');
+        }
+
+        let timestamp_seconds = self
+            .timestamp
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        output.push_str(&format!(
+            "author Author Name <author@example.com> {} +0000\n",
+            timestamp_seconds
+        ));
+        output.push_str(&format!(
+            "committer Committer Name <committer@example.com> {} +0000\n",
+            timestamp_seconds,
+        ));
+
+        output.push('\n');
+        output.push_str(&self.message);
+        output.push('\n');
+
+        output.as_bytes().to_vec()
+    }
+
+    fn encoded_len(&self) -> usize {
+        self.encode().len()
+    }
 }
 
 impl TreeEntry {
@@ -36,7 +95,7 @@ impl TreeEntry {
 
         let name = path.file_name().unwrap().to_str().unwrap().to_owned();
 
-        let object = Object::new(path)?;
+        let object = Object::new_from_path(path)?;
         let hash = object.hash();
 
         Ok(TreeEntry { mode, name, hash })
@@ -117,13 +176,20 @@ impl Object {
             }
 
             Ok(Object::Tree(entries))
+        } else if object_header.starts_with("commit") {
+            todo!("parsing commit object")
         } else {
-            todo!("non-blob/tree object");
+            anyhow::bail!("invalid object");
         }
     }
 
+    /// Create a new commit object.
+    pub fn new_commit(tree_hash: &str, parent_hash: Option<&str>, message: &str) -> Self {
+        Object::Commit(Commit::new(tree_hash, parent_hash, message))
+    }
+
     /// Create a new object from the given file or directory.
-    pub fn new<P>(path: P) -> Result<Self>
+    pub fn new_from_path<P>(path: P) -> Result<Self>
     where
         P: Into<PathBuf>,
     {
@@ -154,22 +220,22 @@ impl Object {
         std::fs::create_dir_all(&path)?;
         path.push(&hash[2..40]);
 
+        let file = std::fs::File::create(path)?;
+        let mut encoder = flate2::write::ZlibEncoder::new(file, Compression::default());
+        encoder.write_all(self.header().as_bytes())?;
+        encoder.write_all(&[0])?;
+
         match self {
             Object::Blob(content) => {
-                let file = std::fs::File::create(path)?;
-                let mut encoder = flate2::write::ZlibEncoder::new(file, Compression::default());
-                encoder.write_all(self.header().as_bytes())?;
-                encoder.write_all(&[0])?;
                 encoder.write_all(content)?;
             }
             Object::Tree(entries) => {
-                let file = std::fs::File::create(path)?;
-                let mut encoder = flate2::write::ZlibEncoder::new(file, Compression::default());
-                encoder.write_all(self.header().as_bytes())?;
-                encoder.write_all(&[0])?;
                 for entry in entries.iter() {
                     encoder.write_all(&entry.encode())?;
                 }
+            }
+            Object::Commit(commit) => {
+                encoder.write_all(&commit.encode())?;
             }
         }
 
@@ -178,24 +244,25 @@ impl Object {
 
     /// Return the hash of this object.
     pub fn hash(&self) -> String {
+        let mut hasher = Sha1::new();
+        hasher.update(self.header().as_bytes());
+        hasher.update([0]);
+
         match self {
             Object::Blob(content) => {
-                let mut hasher = Sha1::new();
-                hasher.update(self.header().as_bytes());
-                hasher.update([0]);
                 hasher.update(content);
-                hex::encode(hasher.finalize())
             }
             Object::Tree(entries) => {
-                let mut hasher = Sha1::new();
-                hasher.update(self.header().as_bytes());
-                hasher.update([0]);
                 for entry in entries.iter() {
                     hasher.update(entry.encode());
                 }
-                hex::encode(hasher.finalize())
+            }
+            Object::Commit(commit) => {
+                hasher.update(commit.encode());
             }
         }
+
+        hex::encode(hasher.finalize())
     }
 
     /// Generate the header string for this object.
@@ -209,6 +276,11 @@ impl Object {
             Object::Tree(entries) => {
                 header.push_str("tree ");
                 let content_len = entries.iter().map(|e| e.encoded_len()).sum::<usize>();
+                header.push_str(&content_len.to_string());
+            }
+            Object::Commit(commit) => {
+                header.push_str("commit ");
+                let content_len = commit.encoded_len();
                 header.push_str(&content_len.to_string());
             }
         }
@@ -228,6 +300,9 @@ impl Object {
                 for entry in entries.iter() {
                     println!("{}", entry.name);
                 }
+            }
+            Object::Commit(commit) => {
+                println!("{}", std::str::from_utf8(&commit.encode()).unwrap())
             }
         }
     }

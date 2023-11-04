@@ -33,7 +33,7 @@ fn main() -> Result<()> {
             assert_eq!(args[2], "-w");
             let path = PathBuf::from(&args[3]);
 
-            let object = Object::new(path)?;
+            let object = Object::new_from_path(path)?;
             object.add()?;
             println!("{}", object.hash());
         }
@@ -52,7 +52,22 @@ fn main() -> Result<()> {
             object.print();
         }
         "write-tree" => {
-            let object = Object::new(PathBuf::from("./"))?;
+            let object = Object::new_from_path(PathBuf::from("./"))?;
+            object.add()?;
+            println!("{}", object.hash());
+        }
+        "commit-tree" => {
+            let tree_hash = &args[2];
+            // Should be a SHA1 hash
+            assert_eq!(tree_hash.len(), 40);
+            assert_eq!(args[3], "-p");
+            let parent_commit_hash = &args[4];
+            // Should be a SHA1 hash
+            assert_eq!(parent_commit_hash.len(), 40);
+            assert_eq!(args[5], "-m");
+            let commit_message = &args[6];
+
+            let object = Object::new_commit(tree_hash, Some(parent_commit_hash), commit_message);
             object.add()?;
             println!("{}", object.hash());
         }
