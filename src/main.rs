@@ -5,7 +5,9 @@ use std::{fs, path::PathBuf};
 use object::Object;
 
 mod object;
+mod pack;
 mod transfer;
+mod util;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -85,13 +87,7 @@ fn main() -> Result<()> {
         Commands::Init => init(),
         Commands::Log => log(),
         Commands::LsFiles => ls_files(),
-        Commands::LsRemote { repo_url } => {
-            let (refs, _) = transfer::ls_remote(&repo_url)?;
-            for ref_ in refs.iter() {
-                ref_.print();
-            }
-            Ok(())
-        }
+        Commands::LsRemote { repo_url } => ls_remote(repo_url),
         Commands::LsTree {
             name_only,
             tree_hash,
@@ -184,6 +180,14 @@ fn log() -> Result<()> {
 
 fn ls_files() -> Result<()> {
     todo!("ls_files")
+}
+
+fn ls_remote(repo_url: reqwest::Url) -> Result<()> {
+    let (refs, _) = transfer::get_refs(&repo_url)?;
+    for ref_ in refs.iter() {
+        ref_.print();
+    }
+    Ok(())
 }
 
 fn ls_tree(tree_hash: &str, name_only: bool) -> Result<()> {
