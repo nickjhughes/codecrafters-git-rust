@@ -1,4 +1,7 @@
+use std::{fs, io::Write, path::PathBuf};
+
 use anyhow::Result;
+use flate2::Compression;
 use reqwest::StatusCode;
 
 use crate::{pack::parse_pack_file, util::parse_packet_lines};
@@ -62,7 +65,7 @@ pub fn get_refs(repo_url: &reqwest::Url) -> Result<(Vec<Ref>, Vec<String>)> {
     Ok((refs, capabilities))
 }
 
-pub fn clone(repo_url: reqwest::Url) -> Result<()> {
+pub fn clone(repo_url: reqwest::Url, directory: PathBuf) -> Result<()> {
     let (refs, _capabilities) = get_refs(&repo_url)?;
     let wanted_refs = refs
         .iter()
@@ -108,7 +111,29 @@ pub fn clone(repo_url: reqwest::Url) -> Result<()> {
     assert!(rest.is_empty());
     assert_eq!(lines[0], b"NAK");
     let pack_file = lines[1];
-    parse_pack_file(pack_file)?;
+    let objects = parse_pack_file(pack_file)?;
+
+    fs::create_dir_all(&directory)?;
+
+    for (hash, object) in objects.iter() {
+        let mut path = PathBuf::from(&directory);
+        path.push(".git/objects");
+        path.push(&hash[0..2]);
+        fs::create_dir_all(&path)?;
+        path.push(&hash[2..40]);
+
+        let file = fs::File::create(path)?;
+        let mut encoder = flate2::write::ZlibEncoder::new(file, Compression::default());
+        encoder.write_all(&object.encode())?;
+    }
+
+    let mut path = PathBuf::from(&directory);
+    path.push(".git/refs");
+    fs::create_dir_all(path)?;
+
+    let mut path = PathBuf::from(&directory);
+    path.push(".git/HEAD");
+    fs::write(path, "ref: refs/heads/master\n")?;
 
     Ok(())
 }

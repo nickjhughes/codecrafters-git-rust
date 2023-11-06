@@ -130,9 +130,8 @@ fn checkout() -> Result<()> {
     todo!("checkout")
 }
 
-fn clone(repo_url: reqwest::Url, _directory: PathBuf) -> Result<()> {
-    // std::fs::create_dir_all(directory)?;
-    transfer::clone(repo_url)
+fn clone(repo_url: reqwest::Url, directory: PathBuf) -> Result<()> {
+    transfer::clone(repo_url, directory)
 }
 
 fn commit() -> Result<()> {

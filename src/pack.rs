@@ -6,9 +6,8 @@ use std::{collections::HashMap, io::Read};
 use crate::util::{high_bit, parse_size};
 
 #[derive(Debug)]
-struct PackedObject {
+pub struct PackedObject {
     ty: PackedObjectType,
-    _size: usize,
     content: Vec<u8>,
 }
 
@@ -21,18 +20,6 @@ enum PackedObjectType {
     OfsDelta(Option<usize>),
     RefDelta(Option<String>),
 }
-
-// impl PackedObjectType {
-//     fn from_content(content: &[u8]) -> Result<PackedObjectType> {
-//         match std::str::from_utf8(&content[0..2])? {
-//             "co" => Ok(PackedObjectType::Commit),
-//             "tr" => Ok(PackedObjectType::Tree),
-//             "blob" => Ok(PackedObjectType::Blob),
-//             "tag" => Ok(PackedObjectType::Tag),
-//             _ => anyhow::bail!("invalid object type"),
-//         }
-//     }
-// }
 
 impl PackedObject {
     fn parse_header(input: &[u8]) -> Result<(&[u8], (PackedObjectType, usize))> {
@@ -71,25 +58,52 @@ impl PackedObject {
     }
 
     fn parse(input: &[u8]) -> Result<(&[u8], PackedObject)> {
-        let (input, (object_type, object_size)) = PackedObject::parse_header(input)?;
+        let (input, (object_type, _object_size)) = PackedObject::parse_header(input)?;
 
         let mut decoder = ZlibDecoder::new(input);
         let mut content = Vec::new();
         decoder.read_to_end(&mut content)?;
+
         let input = &input[decoder.total_in() as usize..];
 
         Ok((
             input,
             PackedObject {
                 ty: object_type,
-                _size: object_size,
                 content,
             },
         ))
     }
+
+    pub fn header(&self) -> String {
+        let mut header = String::new();
+        match self.ty {
+            PackedObjectType::Commit => header.push_str("commit "),
+            PackedObjectType::Tree => header.push_str("tree "),
+            PackedObjectType::Blob => header.push_str("blob "),
+            PackedObjectType::Tag => header.push_str("tag "),
+            _ => unreachable!(),
+        }
+        header.push_str(&self.content.len().to_string());
+        header
+    }
+
+    pub fn encode(&self) -> Vec<u8> {
+        let mut content = Vec::new();
+        content.extend(self.header().as_bytes());
+        content.push(0);
+        content.extend(&self.content);
+        content
+    }
+
+    pub fn hash(&self) -> String {
+        let mut hasher = Sha1::new();
+        hasher.update(self.encode());
+        hex::encode(hasher.finalize())
+    }
 }
 
-pub fn parse_pack_file(input: &[u8]) -> Result<()> {
+pub fn parse_pack_file(input: &[u8]) -> Result<HashMap<String, PackedObject>> {
     assert_eq!(&input[0..4], b"PACK");
 
     let checksum = {
@@ -128,26 +142,11 @@ pub fn parse_pack_file(input: &[u8]) -> Result<()> {
             }
             _ => {}
         }
-
-        let hash = {
-            let mut hasher = Sha1::new();
-            match packed_object.ty {
-                PackedObjectType::Commit => hasher.update("commit "),
-                PackedObjectType::Tree => hasher.update("tree "),
-                PackedObjectType::Blob => hasher.update("blob "),
-                PackedObjectType::Tag => hasher.update("tag "),
-                _ => unreachable!(),
-            }
-            hasher.update(packed_object.content.len().to_string());
-            hasher.update([0]);
-            hasher.update(&packed_object.content);
-            hex::encode(hasher.finalize())
-        };
-
+        let hash = packed_object.hash();
         objects.insert(hash, packed_object);
     }
 
-    Ok(())
+    Ok(objects)
 }
 
 #[derive(Debug, PartialEq)]

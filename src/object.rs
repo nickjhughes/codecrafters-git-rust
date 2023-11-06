@@ -192,11 +192,6 @@ impl Object {
         Object::Commit(Commit::new(tree_hash, parent_hash, message))
     }
 
-    // Create a new object from the given byte slice.
-    // pub fn new_from_bytes(data: &[u8]) -> Result<Self> {
-    //     Object::parse(data)
-    // }
-
     /// Create a new object from the given file or directory.
     pub fn new_from_path<P>(path: P) -> Result<Self>
     where
