@@ -142,7 +142,7 @@ impl TreeEntry {
 
 impl Object {
     /// Parse an object from the store.
-    pub fn parse<P>(path: P) -> Result<Self>
+    pub fn parse_from_path<P>(path: P) -> Result<Self>
     where
         P: Into<PathBuf>,
     {
@@ -151,6 +151,10 @@ impl Object {
         let mut content = Vec::new();
         decoder.read_to_end(&mut content)?;
 
+        Object::parse(&content)
+    }
+
+    fn parse(content: &[u8]) -> Result<Self> {
         let (object_header, object_content) = {
             let mut i = 0;
             while content[i] != 0 {
@@ -187,6 +191,11 @@ impl Object {
     pub fn new_commit(tree_hash: &str, parent_hash: Option<&str>, message: &str) -> Self {
         Object::Commit(Commit::new(tree_hash, parent_hash, message))
     }
+
+    // Create a new object from the given byte slice.
+    // pub fn new_from_bytes(data: &[u8]) -> Result<Self> {
+    //     Object::parse(data)
+    // }
 
     /// Create a new object from the given file or directory.
     pub fn new_from_path<P>(path: P) -> Result<Self>

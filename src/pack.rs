@@ -1,36 +1,48 @@
 use anyhow::Result;
 use flate2::read::ZlibDecoder;
 use sha1::{Digest, Sha1};
-use std::io::Read;
+use std::{collections::HashMap, io::Read};
 
 use crate::util::{high_bit, parse_size};
 
 #[derive(Debug)]
-struct Object {
-    ty: ObjectType,
-    size: usize,
+struct PackedObject {
+    ty: PackedObjectType,
+    _size: usize,
     content: Vec<u8>,
 }
 
 #[derive(Debug, PartialEq)]
-enum ObjectType {
+enum PackedObjectType {
     Commit,
     Tree,
     Blob,
     Tag,
-    OfsDelta(Option<isize>),
+    OfsDelta(Option<usize>),
     RefDelta(Option<String>),
 }
 
-impl Object {
-    fn parse_header(input: &[u8]) -> Result<(&[u8], (ObjectType, usize))> {
+// impl PackedObjectType {
+//     fn from_content(content: &[u8]) -> Result<PackedObjectType> {
+//         match std::str::from_utf8(&content[0..2])? {
+//             "co" => Ok(PackedObjectType::Commit),
+//             "tr" => Ok(PackedObjectType::Tree),
+//             "blob" => Ok(PackedObjectType::Blob),
+//             "tag" => Ok(PackedObjectType::Tag),
+//             _ => anyhow::bail!("invalid object type"),
+//         }
+//     }
+// }
+
+impl PackedObject {
+    fn parse_header(input: &[u8]) -> Result<(&[u8], (PackedObjectType, usize))> {
         let mut object_type = match (input[0] & 0x70) >> 4 {
-            1 => ObjectType::Commit,
-            2 => ObjectType::Tree,
-            3 => ObjectType::Blob,
-            4 => ObjectType::Tag,
-            6 => ObjectType::OfsDelta(None),
-            7 => ObjectType::RefDelta(None),
+            1 => PackedObjectType::Commit,
+            2 => PackedObjectType::Tree,
+            3 => PackedObjectType::Blob,
+            4 => PackedObjectType::Tag,
+            6 => PackedObjectType::OfsDelta(None),
+            7 => PackedObjectType::RefDelta(None),
             _ => anyhow::bail!("invalid object type"),
         };
 
@@ -43,12 +55,12 @@ impl Object {
         };
 
         let input = match &mut object_type {
-            ObjectType::OfsDelta(offset) => {
+            PackedObjectType::OfsDelta(offset) => {
                 let (rest, offset_value) = parse_size(input)?;
-                *offset = Some(-(offset_value as isize));
+                *offset = Some(offset_value);
                 rest
             }
-            ObjectType::RefDelta(hash) => {
+            PackedObjectType::RefDelta(hash) => {
                 *hash = Some(hex::encode(&input[0..20]));
                 &input[20..]
             }
@@ -58,8 +70,8 @@ impl Object {
         Ok((input, (object_type, object_size)))
     }
 
-    fn parse(input: &[u8]) -> Result<(&[u8], Object)> {
-        let (input, (object_type, object_size)) = Object::parse_header(input)?;
+    fn parse(input: &[u8]) -> Result<(&[u8], PackedObject)> {
+        let (input, (object_type, object_size)) = PackedObject::parse_header(input)?;
 
         let mut decoder = ZlibDecoder::new(input);
         let mut content = Vec::new();
@@ -68,9 +80,9 @@ impl Object {
 
         Ok((
             input,
-            Object {
+            PackedObject {
                 ty: object_type,
-                size: object_size,
+                _size: object_size,
                 content,
             },
         ))
@@ -91,40 +103,49 @@ pub fn parse_pack_file(input: &[u8]) -> Result<()> {
         "pack file checksum failure"
     );
 
-    std::fs::write("test.pack", input)?;
-
     let version = u32::from_be_bytes([input[4], input[5], input[6], input[7]]);
     assert!(version == 2 || version == 3);
     let object_count = u32::from_be_bytes([input[8], input[9], input[10], input[11]]);
 
     let mut input = &input[12..];
 
-    let mut objects = Vec::new();
+    let mut objects: HashMap<String, PackedObject> = HashMap::new();
     for _ in 0..object_count {
-        let (rest, object) = Object::parse(input)?;
+        let (rest, mut packed_object) = PackedObject::parse(input)?;
         input = rest;
-        objects.push(object);
-    }
 
-    // Patch delta objects
-    for object in objects.iter_mut() {
-        match &object.ty {
-            ObjectType::OfsDelta(offset) => {
+        match &packed_object.ty {
+            PackedObjectType::OfsDelta(_) => {
                 todo!("offset delta");
-                // let offset = offset.unwrap();
             }
-            ObjectType::RefDelta(hash) => {
+            PackedObjectType::RefDelta(hash) => {
                 let hash = hash.as_ref().unwrap();
-                let patched = patch_delta(&object.content)?;
+                let ref_object = objects
+                    .get(hash)
+                    .expect("could not find delta reference object");
+                packed_object.content = patch_delta(&packed_object.content, &ref_object.content)?;
+                packed_object.ty = PackedObjectType::Blob;
             }
             _ => {}
         }
-    }
 
-    // All delta objects should be patched to regular objects at this point
-    assert!(!objects
-        .iter()
-        .any(|o| matches!(o.ty, ObjectType::OfsDelta(_) | ObjectType::RefDelta(_))));
+        let hash = {
+            let mut hasher = Sha1::new();
+            match packed_object.ty {
+                PackedObjectType::Commit => hasher.update("commit "),
+                PackedObjectType::Tree => hasher.update("tree "),
+                PackedObjectType::Blob => hasher.update("blob "),
+                PackedObjectType::Tag => hasher.update("tag "),
+                _ => unreachable!(),
+            }
+            hasher.update(packed_object.content.len().to_string());
+            hasher.update([0]);
+            hasher.update(&packed_object.content);
+            hex::encode(hasher.finalize())
+        };
+
+        objects.insert(hash, packed_object);
+    }
 
     Ok(())
 }
@@ -132,22 +153,31 @@ pub fn parse_pack_file(input: &[u8]) -> Result<()> {
 #[derive(Debug, PartialEq)]
 enum PatchInstruction {
     Copy { offset: usize, size: usize },
-    Add { size: usize, data: Vec<u8> },
+    Add { data: Vec<u8> },
 }
 
-fn patch_delta(input: &[u8]) -> Result<Vec<u8>> {
-    let (input, source_buf_len) = parse_size(input)?;
+fn patch_delta(input: &[u8], source: &[u8]) -> Result<Vec<u8>> {
+    let (input, _source_buf_len) = parse_size(input)?;
     let (input, target_buf_len) = parse_size(input)?;
+
+    let mut result = Vec::with_capacity(target_buf_len);
 
     let mut rest = input;
     while !rest.is_empty() {
         let (remainder, instruction) = parse_patch_instruction(rest)?;
         rest = remainder;
 
-        dbg!(&instruction);
+        match instruction {
+            PatchInstruction::Copy { offset, size } => {
+                result.extend(&source[offset..offset + size]);
+            }
+            PatchInstruction::Add { data } => {
+                result.extend(data);
+            }
+        }
     }
 
-    todo!("apply patch instructions")
+    Ok(result)
 }
 
 fn parse_patch_instruction(input: &[u8]) -> Result<(&[u8], PatchInstruction)> {
@@ -157,6 +187,7 @@ fn parse_patch_instruction(input: &[u8]) -> Result<(&[u8], PatchInstruction)> {
             let mut bytes_read = 1;
             let mut offset_bytes = [0, 0, 0, 0];
             let mut size_bytes = [0, 0, 0, 0];
+            #[allow(clippy::needless_range_loop)]
             for i in 0..4 {
                 // Offset bytes
                 if input[0] & (1 << i) != 0 {
@@ -184,21 +215,21 @@ fn parse_patch_instruction(input: &[u8]) -> Result<(&[u8], PatchInstruction)> {
             let size = (input[0] & 0x7f) as usize;
             assert!(size > 0, "invalid instruction");
             let data = input[1..1 + size].to_vec();
-            Ok((&input[1 + size..], PatchInstruction::Add { size, data }))
+            Ok((&input[1 + size..], PatchInstruction::Add { data }))
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_patch_instruction, Object, ObjectType, PatchInstruction};
+    use super::{parse_patch_instruction, PackedObject, PackedObjectType, PatchInstruction};
 
     #[test]
     fn test_parse_object_header() {
         let data = &[0x9d, 0x0e];
-        let (rest, (object_type, object_size)) = Object::parse_header(data).unwrap();
+        let (rest, (object_type, object_size)) = PackedObject::parse_header(data).unwrap();
         assert!(rest.is_empty());
-        assert_eq!(object_type, ObjectType::Commit);
+        assert_eq!(object_type, PackedObjectType::Commit);
         assert_eq!(object_size, 237);
     }
 
@@ -224,7 +255,6 @@ mod tests {
         assert_eq!(
             instruction,
             PatchInstruction::Add {
-                size: 2,
                 data: vec![0x12, 0xab],
             }
         );

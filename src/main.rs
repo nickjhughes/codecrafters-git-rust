@@ -115,7 +115,7 @@ fn cat_file(object_name: &str, pretty_print: bool) -> Result<()> {
     path.push(&object_name[0..2]);
     path.push(&object_name[2..40]);
 
-    let object = Object::parse(path)?;
+    let object = Object::parse_from_path(path)?;
     assert!(matches!(object, Object::Blob(_)));
     object.print();
 
@@ -200,7 +200,7 @@ fn ls_tree(tree_hash: &str, name_only: bool) -> Result<()> {
     path.push(&tree_hash[0..2]);
     path.push(&tree_hash[2..40]);
 
-    let object = Object::parse(path)?;
+    let object = Object::parse_from_path(path)?;
     assert!(matches!(object, Object::Tree(_)));
     object.print();
 
