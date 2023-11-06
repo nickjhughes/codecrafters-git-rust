@@ -192,5 +192,7 @@ pub fn clone(repo_url: reqwest::Url, directory: PathBuf) -> Result<()> {
         }
     }
 
+    // TODO: Write index
+
     Ok(())
 }
