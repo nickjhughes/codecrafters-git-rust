@@ -15,16 +15,16 @@ pub enum Object {
     Commit(Commit),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TreeEntry {
-    mode: String,
-    name: String,
-    hash: String,
+    pub mode: String,
+    pub name: String,
+    pub hash: String,
 }
 
 #[derive(Debug)]
 pub struct Commit {
-    tree_hash: String,
+    pub tree_hash: String,
     parent_hash: Option<String>,
     message: String,
     timestamp: SystemTime,
@@ -141,6 +141,17 @@ impl TreeEntry {
 }
 
 impl Object {
+    pub fn parse_from_hash<P>(directory: P, hash: &str) -> Result<Self>
+    where
+        P: Into<PathBuf>,
+    {
+        let mut path: PathBuf = directory.into();
+        path.push(".git/objects");
+        path.push(&hash[0..2]);
+        path.push(&hash[2..40]);
+        Object::parse_from_path(path)
+    }
+
     /// Parse an object from the store.
     pub fn parse_from_path<P>(path: P) -> Result<Self>
     where
@@ -181,7 +192,22 @@ impl Object {
 
             Ok(Object::Tree(entries))
         } else if object_header.starts_with("commit") {
-            todo!("parsing commit object")
+            let commit_content = std::str::from_utf8(object_content)?;
+
+            let mut tree_hash = None;
+            for line in commit_content.lines() {
+                if line.starts_with("tree") {
+                    tree_hash = Some(line.trim_start_matches("tree "));
+                }
+            }
+            assert!(tree_hash.is_some());
+
+            Ok(Object::Commit(Commit {
+                tree_hash: tree_hash.unwrap().to_owned(),
+                parent_hash: None,
+                message: "".into(),
+                timestamp: SystemTime::now(),
+            }))
         } else {
             anyhow::bail!("invalid object");
         }

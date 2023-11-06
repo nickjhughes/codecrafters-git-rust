@@ -4,7 +4,7 @@ use anyhow::Result;
 use flate2::Compression;
 use reqwest::StatusCode;
 
-use crate::{pack::parse_pack_file, util::parse_packet_lines};
+use crate::{object::Object, pack::parse_pack_file, util::parse_packet_lines};
 
 #[derive(Debug)]
 pub struct Ref {
@@ -160,6 +160,37 @@ pub fn clone(repo_url: reqwest::Url, directory: PathBuf) -> Result<()> {
     let mut path = PathBuf::from(&directory);
     path.push(".git/HEAD");
     fs::write(path, format!("ref: {}\n", head_ref))?;
+
+    let head_commit = Object::parse_from_hash(&directory, head_hash)?;
+    let head_tree_hash = match head_commit {
+        Object::Commit(commit) => commit.tree_hash,
+        _ => anyhow::bail!("HEAD points to non-commit object"),
+    };
+    let tree = match Object::parse_from_hash(&directory, &head_tree_hash)? {
+        Object::Tree(tree) => tree,
+        _ => unreachable!(),
+    };
+    let mut tree_entries = tree
+        .iter()
+        .map(|te| (PathBuf::from(&directory), te.clone()))
+        .collect::<Vec<_>>();
+    while let Some((parent_dir, tree_entry)) = tree_entries.pop() {
+        let object = Object::parse_from_hash(&directory, &tree_entry.hash)?;
+        match object {
+            Object::Blob(content) => {
+                let mut object_path = parent_dir;
+                object_path.push(&tree_entry.name);
+                fs::write(object_path, &content)?;
+            }
+            Object::Tree(tree) => {
+                let mut tree_path = parent_dir;
+                tree_path.push(&tree_entry.name);
+                fs::create_dir(&tree_path)?;
+                tree_entries.extend(tree.iter().map(|te| (tree_path.clone(), te.to_owned())));
+            }
+            _ => unreachable!(),
+        }
+    }
 
     Ok(())
 }
