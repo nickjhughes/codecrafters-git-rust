@@ -40,7 +40,7 @@ fn parse_pktlines(input: &[u8]) -> Result<(&[u8], Vec<&[u8]>)> {
     Ok((rest, lines))
 }
 
-pub fn ls_remote(repo_url: reqwest::Url) -> Result<Vec<Ref>> {
+pub fn ls_remote(repo_url: reqwest::Url) -> Result<(Vec<Ref>, Vec<String>)> {
     let client = reqwest::blocking::Client::new();
 
     let request = client.get(format!("{}/info/refs?service=git-upload-pack", repo_url));
@@ -63,9 +63,16 @@ pub fn ls_remote(repo_url: reqwest::Url) -> Result<Vec<Ref>> {
     assert!(rest.is_empty());
 
     let mut refs = Vec::new();
-    for ref_line in ref_lines.iter() {
+    let mut capabilities = Vec::new();
+    for (i, ref_line) in ref_lines.iter().enumerate() {
         let ref_line_str = std::str::from_utf8(ref_line)?;
-        let ref_info = if let Some((ref_info, _)) = ref_line_str.split_once('\0') {
+        let ref_info = if let Some((ref_info, capabilities_str)) = ref_line_str.split_once('\0') {
+            if i == 0 {
+                capabilities.extend(capabilities_str.split_whitespace().map(|s| s.to_owned()));
+            } else {
+                anyhow::bail!("capabilities should only accompany first ref");
+            }
+
             ref_info
         } else {
             ref_line_str
@@ -78,11 +85,11 @@ pub fn ls_remote(repo_url: reqwest::Url) -> Result<Vec<Ref>> {
         });
     }
 
-    Ok(refs)
+    Ok((refs, capabilities))
 }
 
 pub fn clone(repo_url: reqwest::Url) -> Result<()> {
-    let refs = ls_remote(repo_url)?;
+    let (refs, _capabilities) = ls_remote(repo_url)?;
 
     let head_ref = refs.iter().find(|r| r.name == "HEAD").unwrap();
     dbg!(&head_ref);
