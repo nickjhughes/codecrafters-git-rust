@@ -9,7 +9,7 @@ use crate::util::{high_bit, parse_size};
 struct Object {
     ty: ObjectType,
     size: usize,
-    _content: Vec<u8>,
+    content: Vec<u8>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -71,7 +71,7 @@ impl Object {
             Object {
                 ty: object_type,
                 size: object_size,
-                _content: content,
+                content,
             },
         ))
     }
@@ -99,23 +99,99 @@ pub fn parse_pack_file(input: &[u8]) -> Result<()> {
 
     let mut input = &input[12..];
 
+    let mut objects = Vec::new();
     for _ in 0..object_count {
         let (rest, object) = Object::parse(input)?;
-        let compressed_size = input.len() - rest.len();
-        println!(
-            "Parsed {:?} of size {} from {} bytes",
-            object.ty, object.size, compressed_size
-        );
-
         input = rest;
+        objects.push(object);
     }
+
+    // Patch delta objects
+    for object in objects.iter_mut() {
+        match &object.ty {
+            ObjectType::OfsDelta(offset) => {
+                todo!("offset delta");
+                // let offset = offset.unwrap();
+            }
+            ObjectType::RefDelta(hash) => {
+                let hash = hash.as_ref().unwrap();
+                let patched = patch_delta(&object.content)?;
+            }
+            _ => {}
+        }
+    }
+
+    // All delta objects should be patched to regular objects at this point
+    assert!(!objects
+        .iter()
+        .any(|o| matches!(o.ty, ObjectType::OfsDelta(_) | ObjectType::RefDelta(_))));
 
     Ok(())
 }
 
+#[derive(Debug, PartialEq)]
+enum PatchInstruction {
+    Copy { offset: usize, size: usize },
+    Add { size: usize, data: Vec<u8> },
+}
+
+fn patch_delta(input: &[u8]) -> Result<Vec<u8>> {
+    let (input, source_buf_len) = parse_size(input)?;
+    let (input, target_buf_len) = parse_size(input)?;
+
+    let mut rest = input;
+    while !rest.is_empty() {
+        let (remainder, instruction) = parse_patch_instruction(rest)?;
+        rest = remainder;
+
+        dbg!(&instruction);
+    }
+
+    todo!("apply patch instructions")
+}
+
+fn parse_patch_instruction(input: &[u8]) -> Result<(&[u8], PatchInstruction)> {
+    match high_bit(input[0]) {
+        true => {
+            // Copy instruction
+            let mut bytes_read = 1;
+            let mut offset_bytes = [0, 0, 0, 0];
+            let mut size_bytes = [0, 0, 0, 0];
+            for i in 0..4 {
+                // Offset bytes
+                if input[0] & (1 << i) != 0 {
+                    offset_bytes[i] = input[bytes_read];
+                    bytes_read += 1;
+                }
+            }
+            for i in 4..7 {
+                // Size bytes
+                if input[0] & (1 << i) != 0 {
+                    size_bytes[i - 4] = input[bytes_read];
+                    bytes_read += 1;
+                }
+            }
+
+            let instruction = PatchInstruction::Copy {
+                offset: u32::from_le_bytes(offset_bytes) as usize,
+                size: u32::from_le_bytes(size_bytes) as usize,
+            };
+
+            Ok((&input[bytes_read..], instruction))
+        }
+        false => {
+            // Add instruction
+            let size = (input[0] & 0x7f) as usize;
+            assert!(size > 0, "invalid instruction");
+            let data = input[1..1 + size].to_vec();
+            Ok((&input[1 + size..], PatchInstruction::Add { size, data }))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Object, ObjectType};
+    use super::{parse_patch_instruction, Object, ObjectType, PatchInstruction};
 
     #[test]
     fn test_parse_object_header() {
@@ -124,5 +200,33 @@ mod tests {
         assert!(rest.is_empty());
         assert_eq!(object_type, ObjectType::Commit);
         assert_eq!(object_size, 237);
+    }
+
+    #[test]
+    fn test_parse_copy_instruction() {
+        let data = &[0x85, 0x12, 0xab];
+        let (rest, instruction) = parse_patch_instruction(data).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(
+            instruction,
+            PatchInstruction::Copy {
+                offset: 11206674,
+                size: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_add_instruction() {
+        let data = &[0x02, 0x12, 0xab];
+        let (rest, instruction) = parse_patch_instruction(data).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(
+            instruction,
+            PatchInstruction::Add {
+                size: 2,
+                data: vec![0x12, 0xab],
+            }
+        );
     }
 }
