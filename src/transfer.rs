@@ -131,9 +131,35 @@ pub fn clone(repo_url: reqwest::Url, directory: PathBuf) -> Result<()> {
     path.push(".git/refs");
     fs::create_dir_all(path)?;
 
+    for ref_ in refs.iter() {
+        if ref_.name == "HEAD" {
+            continue;
+        }
+
+        let mut ref_path = PathBuf::from(&directory);
+        ref_path.push(".git");
+        ref_path.push(&ref_.name);
+
+        let ref_dir = ref_path.parent().unwrap();
+        fs::create_dir_all(ref_dir)?;
+
+        fs::write(ref_path, &ref_.hash)?;
+    }
+
+    let head_hash = refs
+        .iter()
+        .find(|r| r.name == "HEAD")
+        .map(|r| &r.hash)
+        .unwrap();
+    let head_ref = refs
+        .iter()
+        .find(|r| r.hash == *head_hash && r.name != "HEAD")
+        .map(|r| &r.name)
+        .unwrap();
+
     let mut path = PathBuf::from(&directory);
     path.push(".git/HEAD");
-    fs::write(path, "ref: refs/heads/master\n")?;
+    fs::write(path, format!("ref: {}\n", head_ref))?;
 
     Ok(())
 }
