@@ -86,7 +86,7 @@ fn main() -> Result<()> {
         Commands::Log => log(),
         Commands::LsFiles => ls_files(),
         Commands::LsRemote { repo_url } => {
-            let (refs, _) = transfer::ls_remote(repo_url)?;
+            let (refs, _) = transfer::ls_remote(&repo_url)?;
             for ref_ in refs.iter() {
                 ref_.print();
             }
