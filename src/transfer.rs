@@ -13,6 +13,33 @@ impl Ref {
     }
 }
 
+/// Parse pkt-line data until a flust-pkt ("0000") is found
+fn parse_pktlines(input: &[u8]) -> Result<(&[u8], Vec<&[u8]>)> {
+    let mut rest = input;
+
+    let mut lines = Vec::new();
+    loop {
+        let line_length = u16::from_str_radix(std::str::from_utf8(&rest[0..4])?, 16)? as usize;
+        rest = &rest[4..];
+
+        if line_length == 0 {
+            // flush-pkt
+            break;
+        }
+
+        let line = if rest[line_length - 5] == b'\n' {
+            // Ignore trailing newlines but don't require them
+            &rest[0..line_length - 5]
+        } else {
+            &rest[0..line_length - 4]
+        };
+        lines.push(line);
+        rest = &rest[line_length - 4..];
+    }
+
+    Ok((rest, lines))
+}
+
 pub fn ls_remote(repo_url: reqwest::Url) -> Result<Vec<Ref>> {
     let client = reqwest::blocking::Client::new();
 
@@ -27,38 +54,21 @@ pub fn ls_remote(repo_url: reqwest::Url) -> Result<Vec<Ref>> {
     );
     assert!(resp.status() == StatusCode::OK || resp.status() == StatusCode::NOT_MODIFIED);
 
-    let content = resp.text()?;
+    let content = resp.bytes()?;
+    let (rest, lines) = parse_pktlines(&content)?;
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0], b"# service=git-upload-pack");
 
-    let first_five_bytes = &content.as_bytes()[0..5];
-    assert!(&first_five_bytes[0..4].iter().all(|ch| {
-        ch.is_ascii_hexdigit() && (!ch.is_ascii_alphabetic() || ch.is_ascii_lowercase())
-    }));
-    assert!(first_five_bytes[4] == b'#');
-
-    let pkt_lines = content
-        .split_once('#')
-        .unwrap()
-        .1
-        .lines()
-        .collect::<Vec<&str>>();
-    assert_eq!(*pkt_lines.first().unwrap(), " service=git-upload-pack");
-    assert_eq!(*pkt_lines.last().unwrap(), "0000");
+    let (rest, ref_lines) = parse_pktlines(rest)?;
+    assert!(rest.is_empty());
 
     let mut refs = Vec::new();
-    for (i, ref_line) in pkt_lines.iter().skip(1).enumerate() {
-        if *ref_line == "0000" {
-            continue;
-        }
-
-        let ref_info = if let Some((ref_info, _)) = ref_line.split_once('\0') {
+    for ref_line in ref_lines.iter() {
+        let ref_line_str = std::str::from_utf8(ref_line)?;
+        let ref_info = if let Some((ref_info, _)) = ref_line_str.split_once('\0') {
             ref_info
         } else {
-            ref_line
-        };
-        let ref_info = if i == 0 {
-            ref_info.trim_start_matches("0000")
-        } else {
-            ref_info
+            ref_line_str
         };
         let (hash, name) = ref_info.split_once(' ').unwrap();
         let (_, hash) = hash.split_at(4);
@@ -78,4 +88,21 @@ pub fn clone(repo_url: reqwest::Url) -> Result<()> {
     dbg!(&head_ref);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_pktlines;
+
+    #[test]
+    fn test_parse_pktlines() {
+        let data = b"001e# service=git-upload-pack\n0000";
+        let (rest, lines) = parse_pktlines(data).unwrap();
+        assert!(rest.is_empty());
+        assert_eq!(lines.len(), 1);
+        assert_eq!(
+            std::str::from_utf8(lines[0]).unwrap(),
+            "# service=git-upload-pack"
+        );
+    }
 }
