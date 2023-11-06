@@ -2,12 +2,18 @@ use anyhow::Result;
 use reqwest::StatusCode;
 
 #[derive(Debug)]
-struct Ref<'resp> {
-    name: &'resp str,
-    hash: &'resp str,
+pub struct Ref {
+    name: String,
+    hash: String,
 }
 
-pub fn clone(repo_url: reqwest::Url) -> Result<()> {
+impl Ref {
+    pub fn print(&self) {
+        println!("{} {}", self.hash, self.name);
+    }
+}
+
+pub fn ls_remote(repo_url: reqwest::Url) -> Result<Vec<Ref>> {
     let client = reqwest::blocking::Client::new();
 
     let request = client.get(format!("{}/info/refs?service=git-upload-pack", repo_url));
@@ -56,8 +62,18 @@ pub fn clone(repo_url: reqwest::Url) -> Result<()> {
         };
         let (hash, name) = ref_info.split_once(' ').unwrap();
         let (_, hash) = hash.split_at(4);
-        refs.push(Ref { hash, name });
+        refs.push(Ref {
+            hash: hash.to_owned(),
+            name: name.to_owned(),
+        });
     }
+
+    Ok(refs)
+}
+
+pub fn clone(repo_url: reqwest::Url) -> Result<()> {
+    let refs = ls_remote(repo_url)?;
+
     let head_ref = refs.iter().find(|r| r.name == "HEAD").unwrap();
     dbg!(&head_ref);
 

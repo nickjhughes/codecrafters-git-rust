@@ -5,7 +5,7 @@ use std::{fs, path::PathBuf};
 use object::Object;
 
 mod object;
-// mod transfer;
+mod transfer;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -44,6 +44,9 @@ enum Commands {
     Init,
     Log,
     LsFiles,
+    LsRemote {
+        repo_url: reqwest::Url,
+    },
     LsTree {
         #[arg(long)]
         name_only: bool,
@@ -82,6 +85,13 @@ fn main() -> Result<()> {
         Commands::Init => init(),
         Commands::Log => log(),
         Commands::LsFiles => ls_files(),
+        Commands::LsRemote { repo_url } => {
+            let refs = transfer::ls_remote(repo_url)?;
+            for ref_ in refs.iter() {
+                ref_.print();
+            }
+            Ok(())
+        }
         Commands::LsTree {
             name_only,
             tree_hash,
@@ -124,10 +134,9 @@ fn checkout() -> Result<()> {
     todo!("checkout")
 }
 
-fn clone(_repo_url: reqwest::Url, _directory: PathBuf) -> Result<()> {
+fn clone(repo_url: reqwest::Url, _directory: PathBuf) -> Result<()> {
     // std::fs::create_dir_all(directory)?;
-    //     transfer::clone(repo_url)?;
-    todo!("clone")
+    transfer::clone(repo_url)
 }
 
 fn commit() -> Result<()> {
